@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Purplle RTO & RVP - Camera</title>
+<style>
+  :root{--bg:#eef1f6;--card:#fff;--ink:#1f2a44;--mute:#6b7690;--pri:#2b3a67;--ok:#16a34a;--bad:#dc2626;--line:#d9deea}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  .wrap{max-width:860px;margin:0 auto;padding:14px}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:var(--mute);font-size:13px;margin-bottom:10px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .view{background:#000;border-radius:10px;overflow:hidden;position:relative;min-height:240px}
+  video,#reader{width:100%;display:block}
+  #reader video{width:100% !important}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  button,select{font:inherit;border-radius:8px;border:1px solid var(--line);padding:9px 14px;background:#fff;color:var(--ink);cursor:pointer}
+  button.pri{background:var(--pri);color:#fff;border-color:var(--pri)}
+  button.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
+  button.rec{background:var(--bad);color:#fff;border-color:var(--bad)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .msg{margin-top:10px;font-size:13px;color:var(--mute)}
+  .msg.err{color:var(--bad)}
+  .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+  .count{font-weight:600}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#aaa;margin-right:6px}
+  .dot.on{background:var(--bad);animation:b 1s infinite}
+  @keyframes b{50%{opacity:.25}}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Camera</h1>
+  <div class="sub" id="sub">Connecting to the dashboard...</div>
+
+  <div class="card">
+    <!-- SCAN MODE -->
+    <div id="scanBox" class="hidden">
+      <div class="view"><div id="reader"></div></div>
+    </div>
+
+    <!-- EVIDENCE MODE -->
+    <div id="evBox" class="hidden">
+      <div class="view"><video id="vid" playsinline muted autoplay></video></div>
+    </div>
+
+    <div class="row">
+      <label for="camSel" style="font-size:13px;color:var(--mute)">Camera</label>
+      <select id="camSel"></select>
+      <button type="button" id="retryBtn" class="hidden pri">Try again</button>
+    </div>
+
+    <div id="evControls" class="row hidden">
+      <button type="button" id="photoBtn" class="pri">Take photo</button>
+      <button type="button" id="recBtn">Start video</button>
+      <span><span class="dot" id="recDot"></span><span id="recInfo"></span></span>
+    </div>
+    <div id="evSummary" class="hidden" style="margin-top:10px">
+      <div>Photos: <span class="count" id="photoCount">0</span> / <span id="minPhotos">6</span> minimum &nbsp;·&nbsp; Video: <span class="count" id="videoState">none</span></div>
+      <div class="thumbs" id="thumbs"></div>
+      <div class="row">
+        <button type="button" id="undoBtn">Remove last photo</button>
+        <button type="button" id="doneBtn" class="ok">Done - send to dashboard</button>
+      </div>
+    </div>
+
+    <div class="msg" id="msg"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+(function(){
+  var opener_ = window.opener;
+  var parentOrigin = null;     // learnt from the dashboard's first (init) message
+  var cfg = { mode: 'scan', minPhotos: 6, maxVideoMb: 24, hasVideo: false, photoCount: 0 };
+  var stream = null, scanner = null, recorder = null, chunks = [], recBytes = 0, recStart = 0, recTimer = null;
+  var photos = [], video = null, scanDone = false;
+
+  function $(id){ return document.getElementById(id); }
+  function say(t, err){ var m = $('msg'); m.textContent = t || ''; m.className = 'msg' + (err ? ' err' : ''); }
+
+  function errText(e){
+    var n = (e && e.name) || '', m = String((e && e.message) || e || '');
+    if (/NotAllowed|Permission|denied|dismissed/i.test(n + ' ' + m))
+      return 'Camera is blocked. Click the camera icon in the address bar, choose Allow, then press Try again. Also check Windows Settings > Privacy > Camera.';
+    if (/NotFound|DevicesNotFound/i.test(n + ' ' + m)) return 'No camera found. Connect a camera and press Try again.';
+    if (/NotReadable|TrackStart|in use/i.test(n + ' ' + m)) return 'The camera is in use by another app (Teams / Zoom / Meet). Close it and press Try again.';
+    return 'Could not open the camera: ' + m;
+  }
+  function fail(e){ say(errText(e), true); $('retryBtn').classList.remove('hidden'); }
+
+  function sendToParent(payload){
+    if (!opener_ || opener_.closed || !parentOrigin){ say('Dashboard window is closed. Reopen the camera from the dashboard.', true); return false; }
+    opener_.postMessage(payload, parentOrigin);
+    return true;
+  }
+
+  /* ---------- camera list ---------- */
+  function listCams(){
+    return navigator.mediaDevices.enumerateDevices().then(function(devs){
+      var cams = devs.filter(function(d){ return d.kind === 'videoinput'; });
+      var sel = $('camSel'), saved = '';
+      try { saved = localStorage.getItem('camPref') || ''; } catch(e){}
+      sel.innerHTML = cams.map(function(c, i){
+        return '<option value="' + c.deviceId + '">' + (c.label || ('Camera ' + (i + 1))).replace(/</g,'&lt;') + '</option>';
+      }).join('');
+      var pick = cams.find(function(c){ return c.deviceId === saved; }) ||
+                 cams.find(function(c){ return /back|rear|environment/i.test(c.label || ''); }) || cams[cams.length - 1];
+      if (pick) sel.value = pick.deviceId;
+      return cams;
+    });
+  }
+
+  function stopAll(){
+    if (recorder && recorder.state !== 'inactive'){ try { recorder.stop(); } catch(e){} }
+    if (stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+    if (scanner){ try { scanner.stop().then(function(){ scanner.clear(); }).catch(function(){}); } catch(e){} scanner = null; }
+  }
+
+  /* ---------- start ---------- */
+  function start(){
+    $('retryBtn').classList.add('hidden'); say('Starting camera...');
+    stopAll();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ fail({ message: 'This browser has no camera support. Use Chrome or Edge.' }); return; }
+    // ask permission first -> get a precise error and the real device labels
+    navigator.mediaDevices.getUserMedia({ video: true }).then(function(s){
+      s.getTracks().forEach(function(t){ t.stop(); });
+      return listCams();
+    }).then(function(){
+      var id = $('camSel').value;
+      try { localStorage.setItem('camPref', id); } catch(e){}
+      if (cfg.mode === 'scan') startScan(id); else startEvidence(id);
+    }).catch(fail);
+  }
+
+  function startScan(id){
+    $('scanBox').classList.remove('hidden');
+    scanner = new Html5Qrcode('reader', { verbose: false });
+    scanner.start(id, { fps: 10, qrbox: { width: 300, height: 150 } }, function(text){
+      if (scanDone) return; scanDone = true;
+      say('Scanned: ' + text);
+      if (sendToParent({ type: 'cam-scan', code: text })){ setTimeout(function(){ window.close(); }, 250); }
+    }, function(){}).then(function(){ say('Point the camera at the barcode.'); }).catch(fail);
+  }
+
+  function startEvidence(id){
+    $('evBox').classList.remove('hidden'); $('evControls').classList.remove('hidden'); $('evSummary').classList.remove('hidden');
+    navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: id }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
+      .then(function(s){ stream = s; $('vid').srcObject = s; say('Take at least ' + cfg.minPhotos + ' photos (all sides) and record a video.'); refresh(); })
+      .catch(fail);
+  }
+
+  /* ---------- evidence actions ---------- */
+  function refresh(){
+    $('photoCount').textContent = photos.length + cfg.photoCount;
+    $('minPhotos').textContent = cfg.minPhotos;
+    $('videoState').textContent = video ? (Math.round(video.size / 104857.6) / 10) + ' MB' : (cfg.hasVideo ? 'already added' : 'none');
+    var t = $('thumbs'); t.innerHTML = '';
+    photos.forEach(function(p){ var im = new Image(); im.src = p.url; t.appendChild(im); });
+    $('doneBtn').disabled = !(photos.length || video);
+  }
+
+  $('photoBtn').onclick = function(){
+    var v = $('vid');
+    if (!v.videoWidth){ say('Camera is not ready yet.', true); return; }
+    var sc = Math.min(1, 1600 / v.videoWidth), c = document.createElement('canvas');
+    c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    c.toBlob(function(b){ if (!b) return; photos.push({ blob: b, url: URL.createObjectURL(b) }); say('Photo ' + (photos.length + cfg.photoCount) + ' saved.'); refresh(); }, 'image/jpeg', 0.82);
+  };
+  $('undoBtn').onclick = function(){ var p = photos.pop(); if (p) URL.revokeObjectURL(p.url); refresh(); };
+
+  $('recBtn').onclick = function(){
+    if (recorder && recorder.state === 'recording'){ recorder.stop(); return; }
+    if (!stream || !window.MediaRecorder){ say('Video recording is not supported here.', true); return; }
+    var limit = cfg.maxVideoMb * 1048576;
+    var types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    var mime = types.find(function(t){ return MediaRecorder.isTypeSupported(t); }) || '';
+    chunks = []; recBytes = 0;
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 1500000 } : { videoBitsPerSecond: 1500000 });
+    recorder.ondataavailable = function(e){
+      if (!e.data || !e.data.size) return;
+      chunks.push(e.data); recBytes += e.data.size;
+      if (recBytes >= limit * 0.96 && recorder.state === 'recording'){ say('Reached the ' + cfg.maxVideoMb + ' MB limit - recording stopped.'); recorder.stop(); }
+    };
+    recorder.onstop = function(){
+      clearInterval(recTimer); $('recBtn').textContent = 'Start video'; $('recBtn').className = ''; $('recDot').classList.remove('on'); $('recInfo').textContent = '';
+      var b = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
+      if (b.size > limit){ say('Video is over ' + cfg.maxVideoMb + ' MB - discarded. Record a shorter clip.', true); return; }
+      if (b.size < 1000) return;
+      video = b; refresh(); say('Video saved.');
+    };
+    recorder.start(1000); recStart = Date.now();
+    $('recBtn').textContent = 'Stop video'; $('recBtn').className = 'rec'; $('recDot').classList.add('on');
+    recTimer = setInterval(function(){
+      $('recInfo').textContent = Math.round((Date.now() - recStart) / 1000) + 's - ' + (Math.round(recBytes / 104857.6) / 10) + ' / ' + cfg.maxVideoMb + ' MB';
+    }, 500);
+  };
+
+  $('doneBtn').onclick = function(){
+    if (recorder && recorder.state === 'recording'){ say('Stop the video recording first.', true); return; }
+    if (sendToParent({ type: 'cam-evidence', photos: photos.map(function(p){ return p.blob; }), video: video })){
+      say('Sent to the dashboard.'); setTimeout(function(){ window.close(); }, 300);
+    }
+  };
+
+  $('camSel').onchange = function(){ start(); };
+  $('retryBtn').onclick = start;
+
+  /* ---------- handshake with the dashboard ---------- */
+  window.addEventListener('message', function(e){
+    if (!opener_ || e.source !== opener_) return;
+    var d = e.data || {};
+    if (d.type !== 'cam-init' || parentOrigin) return;
+    parentOrigin = e.origin;
+    cfg.mode = d.mode === 'evidence' ? 'evidence' : 'scan';
+    cfg.minPhotos = d.minPhotos || 6; cfg.maxVideoMb = d.maxVideoMb || 24;
+    cfg.hasVideo = !!d.hasVideo; cfg.photoCount = d.photoCount || 0;
+    $('title').textContent = cfg.mode === 'scan' ? 'Scan barcode' : 'QC evidence - photos & video';
+    $('sub').textContent = cfg.mode === 'scan' ? 'The code is sent to the dashboard automatically.' : 'Photos and video are sent to the dashboard when you press Done.';
+    start();
+  });
+  window.addEventListener('beforeunload', stopAll);
+
+  if (!opener_){ $('sub').textContent = 'Open this page from the RTO & RVP dashboard (Scan / Camera button).'; say('This page works only when opened from the dashboard.', true); }
+  else { try { opener_.postMessage({ type: 'cam-ready' }, '*'); } catch(e){} }
+})();
+</script>
+</body>
+</html>
