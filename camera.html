@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Purplle RTO & RVP - Camera</title>
+<title>Camera</title>
 <style>
   :root{--bg:#eef1f6;--card:#fff;--ink:#1f2a44;--mute:#6b7690;--pri:#2b3a67;--ok:#16a34a;--bad:#dc2626;--line:#d9deea}
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
-  .wrap{max-width:860px;margin:0 auto;padding:14px}
+  .wrap{max-width:860px;margin:0 auto;padding:8px}
   h1{font-size:18px;margin:0 0 4px}
   .sub{color:var(--mute);font-size:13px;margin-bottom:10px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .card{background:var(--card);border:0;border-radius:12px;padding:0}
   .view{background:#000;border-radius:10px;overflow:hidden;position:relative;min-height:240px}
   video,#reader{width:100%;display:block}
   #reader video{width:100% !important}
@@ -34,8 +34,8 @@
 </head>
 <body>
 <div class="wrap">
-  <h1 id="title">Camera</h1>
-  <div class="sub" id="sub">Connecting to the dashboard...</div>
+  <h1 id="title" class="hidden">Camera</h1>
+  <div class="sub hidden" id="sub"></div>
 
   <div class="card">
     <!-- SCAN MODE -->
@@ -48,9 +48,8 @@
       <div class="view"><video id="vid" playsinline muted autoplay></video></div>
     </div>
 
-    <div class="row">
-      <label for="camSel" style="font-size:13px;color:var(--mute)">Camera</label>
-      <select id="camSel"></select>
+    <div class="row" id="camRow">
+      <select id="camSel" class="hidden" title="Choose camera"></select>
       <button type="button" id="retryBtn" class="hidden pri">Try again</button>
     </div>
 
@@ -112,6 +111,7 @@
       var pick = cams.find(function(c){ return c.deviceId === saved; }) ||
                  cams.find(function(c){ return /back|rear|environment/i.test(c.label || ''); }) || cams[cams.length - 1];
       if (pick) sel.value = pick.deviceId;
+      sel.classList.toggle('hidden', cams.length < 2);
       return cams;
     });
   }
@@ -145,13 +145,13 @@
       if (scanDone) return; scanDone = true;
       say('Scanned: ' + text);
       if (sendToParent({ type: 'cam-scan', code: text })){ setTimeout(function(){ window.close(); }, 250); }
-    }, function(){}).then(function(){ say('Point the camera at the barcode.'); }).catch(fail);
+    }, function(){}).then(function(){ say(''); }).catch(fail);
   }
 
   function startEvidence(id){
     $('evBox').classList.remove('hidden'); $('evControls').classList.remove('hidden'); $('evSummary').classList.remove('hidden');
     navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: id }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
-      .then(function(s){ stream = s; $('vid').srcObject = s; say('Take at least ' + cfg.minPhotos + ' photos (all sides) and record a video.'); refresh(); })
+      .then(function(s){ stream = s; $('vid').srcObject = s; say(''); refresh(); })
       .catch(fail);
   }
 
@@ -221,13 +221,12 @@
     cfg.mode = d.mode === 'evidence' ? 'evidence' : 'scan';
     cfg.minPhotos = d.minPhotos || 6; cfg.maxVideoMb = d.maxVideoMb || 24;
     cfg.hasVideo = !!d.hasVideo; cfg.photoCount = d.photoCount || 0;
-    $('title').textContent = cfg.mode === 'scan' ? 'Scan barcode' : 'QC evidence - photos & video';
-    $('sub').textContent = cfg.mode === 'scan' ? 'The code is sent to the dashboard automatically.' : 'Photos and video are sent to the dashboard when you press Done.';
+    document.title = cfg.mode === 'scan' ? 'Scan barcode' : 'QC photos & video';
     start();
   });
   window.addEventListener('beforeunload', stopAll);
 
-  if (!opener_){ $('sub').textContent = 'Open this page from the RTO & RVP dashboard (Scan / Camera button).'; say('This page works only when opened from the dashboard.', true); }
+  if (!opener_){ say('Open the camera from the RTO & RVP dashboard.', true); }
   else { try { opener_.postMessage({ type: 'cam-ready' }, '*'); } catch(e){} }
 })();
 </script>
