@@ -53,9 +53,10 @@
       <button type="button" id="retryBtn" class="hidden pri">Try again</button>
     </div>
 
+    <div id="stepBanner" class="hidden" style="margin:10px 0;padding:10px 12px;border-radius:10px;background:#eef4ff;border:1px solid #cfe0ff;font-size:14px;line-height:1.45"></div>
     <div id="evControls" class="row hidden">
       <button type="button" id="photoBtn" class="pri">Take photo</button>
-      <button type="button" id="recBtn">Start video</button>
+      <button type="button" id="recBtn">Start box video</button>
       <span><span class="dot" id="recDot"></span><span id="recInfo"></span></span>
     </div>
     <div id="evSummary" class="hidden" style="margin-top:10px">
@@ -163,6 +164,15 @@
     var t = $('thumbs'); t.innerHTML = '';
     photos.forEach(function(p){ var im = new Image(); im.src = p.url; t.appendChild(im); });
     $('doneBtn').disabled = !(photos.length || video);
+    var haveVideo = !!video || cfg.hasVideo, total = photos.length + cfg.photoCount, sb = $('stepBanner');
+    if (cfg.mode === 'evidence'){
+      sb.classList.remove('hidden');
+      if (!haveVideo) sb.innerHTML = '<b>Step 1 - Record box video.</b> Press "Start box video", film the sealed box and opening it, then press Stop.';
+      else if (total < cfg.minPhotos) sb.innerHTML = '<b>Step 2 - Take at least ' + cfg.minPhotos + ' photos.</b> ' + (cfg.minPhotos - total) + ' more to go.';
+      else sb.innerHTML = '<b style="color:#15803d">All set.</b> Press "Done - send to dashboard".';
+      $('photoBtn').disabled = !haveVideo;
+      if (!(recorder && recorder.state === 'recording')) $('recBtn').textContent = haveVideo ? 'Re-record video' : 'Start box video';
+    }
   }
 
   $('photoBtn').onclick = function(){
@@ -189,7 +199,7 @@
       if (recBytes >= limit * 0.96 && recorder.state === 'recording'){ say('Reached the ' + cfg.maxVideoMb + ' MB limit - recording stopped.'); recorder.stop(); }
     };
     recorder.onstop = function(){
-      clearInterval(recTimer); $('recBtn').textContent = 'Start video'; $('recBtn').className = ''; $('recDot').classList.remove('on'); $('recInfo').textContent = '';
+      clearInterval(recTimer); $('recBtn').className = ''; $('recDot').classList.remove('on'); $('recInfo').textContent = '';
       var b = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
       if (b.size > limit){ say('Video is over ' + cfg.maxVideoMb + ' MB - discarded. Record a shorter clip.', true); return; }
       if (b.size < 1000) return;
